@@ -6,6 +6,6 @@
  - `continuous_lqr.m`: Linear quadratic regulator controller for continuous optimal magnetic attitude control.
  - `hybrid_control.m`: Linear quadratic regulator controller for hybrid optimal magnetic and impulsive attitude control.
  - `hybrid_optimization.m`: Examination of a cost function to optimize number of impulses in hybrid model.
- - `continuous_hybrid_comparison.m`: Code for plotting continuous and hybrid control responses.
+ - `hybrid_continuous_comparison.m`: Code for plotting continuous and hybrid control responses.
 
  These programs are part of a Thesis titled "Optimal Hybrid Magnetic and Impulsive Control for Earth-Observing Spacecraft"
