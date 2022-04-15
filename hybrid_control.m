@@ -1,19 +1,18 @@
-%% MAGNETIC SATELLITE CONTROL (LINEAR QUADRATIC REGULATOR) %%
-%  Contributors: Adyn Miles
-%  Description: This code runs continuous magnetic optimal control using an
-%               LQR controller
+%% MAGNETIC AND IMPULSIVE SATELLITE CONTROL  %%
 
 initial_values = deg2rad([5; 5; 5; 1; 1; 1]);               % Input initial conditions in degrees.
 
-omega = 100;                                                % Magnetorquer coil resistance
+impulses = 30;                                               % Number of impulses.
+
 n = 400;                                                    % Number of turns
 d = 0.100;                                                  % Diameter of magnetorquer (m)
 A = (pi*d^2)/4;                                             % Area of magnetorquers (m^2)     
-
+omega = 100;
 dt = 1;                                                     % Time step
 T = 54000;                                                  % Total simulation time
 t_list = 0:dt:T;                                            % Time grid for plotting                         
 t_span = [0, T];
+tk = linspace(0, T, impulses);                              % Discrete time array
 
 inc = deg2rad(86);                                          % Inclination
 
@@ -26,8 +25,11 @@ I2 = 30;
 I3 = 15;
 
 Q_matrix = eye(6);                                          % LQR Q matrix input
+Qd_matrix = eye(6);                                         % LQR Q matrix discrete input
 rho = 0.1;                                                    % LQR matrix scaling factor
+rho_d = 0.001;                                               % Discrete LQR scaling factor
 R_matrix = rho*eye(3);                                      % LQR R matrix input
+Rd_matrix = rho_d*eye(3);                                   % LQR R matrix discrete input
 
 R_0 = 6871000;                                              % Orbital radius (assuming 500km altitude)
 omega_o = sqrt(mu_e/R_0^3);                                 % Natural frequency
@@ -37,6 +39,13 @@ k_3 = (I2 - I1)/I3;
 I_inv = [-1/I1, 0, 0;
         0, -1/I2, 0;
         0, 0, -1/I3];
+
+Bd = [0, 0, 0;
+      0, 0, 0; 
+      0, 0, 0;
+      I_inv(1,1), I_inv(1,2), I_inv(1,3);
+      I_inv(2,1), I_inv(2,2), I_inv(2,3);
+      I_inv(3,1), I_inv(3,2), I_inv(3,3)];
 
 Ac = zeros(6);                                              % Dynamics matrix
     Ac(1, 4) = 1;
@@ -56,11 +65,15 @@ options = odeset('RelTol',1e-8,'AbsTol',1e-8);              % Error tolerance fo
 
 % Initialize matrices for Riccati equation
 K = zeros(length(t_list), 3, 6);
+Kd = zeros(length(t_list), 3, 6);
 P = zeros(length(t_list), 6, 6);
+Pd = zeros(length(t_list), 6, 6);
 P(end, :, :) = eye(6);                                      % Terminal condition for P
+Pd(end, :, :) = eye(6);
 Bc_final = squeeze(Bc(end, :, :));
 P_final = squeeze(P(end, :, :));
 K(end, :, :) = inv(R_matrix)*Bc_final.'*P_final;
+Kd(end, :, :) = inv(R_matrix)*Bd.'*P_final; 
 
 % Apply Euler scheme to solve Riccati equation backwards
 for i = length(t_list):-1:2
@@ -72,21 +85,51 @@ for i = length(t_list):-1:2
     K(i - 1, :, :) = inv(R_matrix)*Bc_iminusone.'*P_iminusone;
 end
 
-% Using optimal gains, numerically integrate 
-[t_out, theta_out] = ode45(@(t, theta) lqr_control(t, theta, Ac, Bc, K, t_list), t_span, initial_values, options);
+t_full = [];
+theta_full = [];
 
-% Find control inputs
-m = zeros(length(t_out), 3);
-
-for i = 1:length(t_out)
-    t_diff = abs(t_out(i) - t_list);
-    [val, idx] = min(t_diff);
-    m(i, :) = squeeze(K(idx, :, :))*theta_out(i, :)';
+for i = impulses:-1:2
+    Pd_i = squeeze(Pd(i, :, :));
+    P_diminusone = Qd_matrix + Pd_i - (Pd_i*Bd*inv(Rd_matrix + (Bd.'*Pd_i*Bd))*Bd.'*Pd_i);
+    Pd(i - 1, :, :) = P_diminusone;
+    Kd(i - 1, :, :) = inv(Rd_matrix)*Bd.'*inv(eye(6).')*(P_diminusone - Qd_matrix);
 end
 
-I = m / (n*A);                                              % Input current                                               
+theta_impulses = [];
+% Using optimal gains, numerically integrate
+for i = 1:impulses-1
+    [t_out, theta_out] = ode45(@(t, theta) lqr_control(t, theta, Ac, Bc, K, t_list, i, T, impulses), [tk(i), tk(i+1)], initial_values, options);
+    t_full = [t_full; t_out];
+    theta_full = [theta_full; theta_out];
+    Kd_current = squeeze(Kd(i, :, :));
+    theta_impulse = (eye(6) - (Bd*Kd_current))*theta_full(end,:,:)';
+    theta_impulses = [theta_impulses, theta_impulse];
+    theta_full(end, :) = theta_impulse;
+    initial_values = theta_impulse;
+end 
+
+% Find control inputs
+m = zeros(length(t_full), 3);
+
+for i = 1:length(t_full)
+    %t_diff = abs(t_full(i) - t_list);
+    %[val, idx] = min(t_diff);
+    m(i, :) = squeeze(K(i, :, :))*theta_full(i, :)';
+end
+
+I = m / (n*A);                                              % Input current   
 E = (omega)/((n^2) * (A^2))* (T*((m(:,1)'*m(:,1)) + (m(:,2)'*m(:,2)) + (m(:,3)'*m(:,3))));
 fprintf("Total Energy Consumed: %dJ\n", E);
+
+T = zeros(impulses, 3);
+for i = 1:impulses-1
+    T(i, :) = squeeze(Kd(i, :, :))*theta_impulses(:, i);
+end
+
+% Assume 60s to 100s
+% Integrate the differential equation.
+% 2nd order differential equation, I*theta(theta_doubledot) = delta_v
+torque_imp = sqrt(impulses/54000*((T(:,1)'*T(:,1) + T(:,2)'*T(:,2) + T(:,3)'*T(:,3)))/impulses);
 
 torque_mag = zeros(length(t_out), 3);
 for i = 1:length(t_out)
@@ -99,68 +142,68 @@ for i = 1:length(t_out)
 end
     
  
-total_torque = sqrt(54000*((torque_mag(:,1)'*torque_mag(:,1) + torque_mag(:,2)'*torque_mag(:,2) + torque_mag(:,3)'*torque_mag(:,3)))/(54000));
-
+total_mag = sqrt(54000*((torque_mag(:,1)'*torque_mag(:,1) + torque_mag(:,2)'*torque_mag(:,2) + torque_mag(:,3)'*torque_mag(:,3)))/(54000));
+total_torque = sqrt(total_mag^2 + torque_imp^2);
 
 % Plot angular position
 figure;
 subplot(3, 1, 1);
-plot(t_out/5400, theta_out(:,1), 'LineWidth', 2);
-title("Roll Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angle (rad)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,1), 'LineWidth', 2);
+title("Roll Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angle (rad)", 'FontSize', 14);
 
 subplot(3, 1, 2);
-plot(t_out/5400, theta_out(:,2), 'LineWidth', 2);
-title("Pitch Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angle (rad)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,2), 'LineWidth', 2);
+title("Pitch Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angle (rad)", 'FontSize', 14);
 
 subplot(3, 1, 3);
-plot(t_out/5400, theta_out(:,3), 'LineWidth', 2);
-title("Yaw Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angle (rad)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,3), 'LineWidth', 2);
+title("Yaw Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angle (rad)", 'FontSize', 14);
 
 % Plot angular velocities
 figure;
 subplot(3, 1, 1);
-plot(t_out/5400, theta_out(:,4), 'LineWidth', 2);
-title("Roll Angular Velocity Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angular Velocity (rad/s)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,4), 'LineWidth', 2);
+title("Roll Angular Velocity Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angular Velocity (rad/s)", 'FontSize', 14);
 
 subplot(3, 1, 2);
-plot(t_out/5400, theta_out(:,5), 'LineWidth', 2);
-title("Pitch Angular Velocity Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angular Velocity (rad/s)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,5), 'LineWidth', 2);
+title("Pitch Angular Velocity Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angular Velocity (rad/s)", 'FontSize', 14);
 
 subplot(3, 1, 3);
-plot(t_out/5400, theta_out(:,6), 'LineWidth', 2);
-title("Yaw Angular Velocity Behaviour with Magnetic LQR Control", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Angular Velocity (rad/s)", 'FontSize', 16);
+plot(t_full/5400, theta_full(:,6), 'LineWidth', 2);
+title("Yaw Angular Velocity Behaviour with Hybrid LQR Control", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Angular Velocity (rad/s)", 'FontSize', 14);
 
 % Plot required control input current
 figure;
 subplot(3, 1, 1); 
-plot(t_out/5400, I(:, 1), 'LineWidth', 2);
-title("Control Input Current Required (Roll)", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Current Input (A)", 'FontSize', 16);
+plot(t_full/5400, I(:, 1), 'LineWidth', 2);
+title("Control Input Current Required (Roll)", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Current Input (A)", 'FontSize', 14);
 
 subplot(3, 1, 2); 
-plot(t_out/5400, I(:, 2), 'LineWidth', 2);
-title("Control Input Current Required (Pitch)", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Current Input (A)", 'FontSize', 16);
+plot(t_full/5400, I(:, 2), 'LineWidth', 2);
+title("Control Input Current Required (Pitch)", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Current Input (A)", 'FontSize', 14);
 
 subplot(3, 1, 3); 
-plot(t_out/5400, I(:, 3), 'LineWidth', 2);
-title("Control Input Current Required (Yaw)", 'FontSize', 16);
-xlabel("Number of Orbits", 'FontSize', 16);
-ylabel("Current Input (A)", 'FontSize', 16);
+plot(t_full/5400, I(:, 3), 'LineWidth', 2);
+title("Control Input Current Required (Yaw)", 'FontSize', 14);
+xlabel("Number of Orbits", 'FontSize', 14);
+ylabel("Current Input (A)", 'FontSize', 14);
 
 
 
@@ -176,7 +219,7 @@ function [thetadot] = open_loop(t, theta, Ac)
     I3 = 15;
     
     Q_matrix = eye(6);
-    rho = 0.1;
+    rho = 5;
     R_matrix = rho*eye(3);
     
     inc = deg2rad(86);                  
@@ -239,7 +282,7 @@ function [Bc, B_o] = solve_Bc(t, theta)
     I3 = 15;
     
     Q_matrix = eye(6);
-    rho = 0.1;
+    rho = 5;
     R_matrix = rho*eye(3);
     
     inc = deg2rad(86);                             
@@ -291,13 +334,14 @@ function [Bc, B_o] = solve_Bc(t, theta)
                         0, 0, 0;
                         Bc_lower(1,1), Bc_lower(1,2), Bc_lower(1,3);
                         Bc_lower(2,1), Bc_lower(2,2), Bc_lower(2,3);
-                        Bc_lower(3,1), Bc_lower(3,2), Bc_lower(3,3);];
+                        Bc_lower(3,1), Bc_lower(3,2), Bc_lower(3,3)];
     end
 end
 
-function [thetadot] = lqr_control(t, theta, Ac, Bc, K, t_list)
+function [thetadot] = lqr_control(t, theta, Ac, Bc, K, t_list, iter, T, impulses)
     % Find the closest time on the time grid to the inputted time from
     % ode45
+    t = (iter*T/(impulses-1)) + t;
     t_diff = abs(t - t_list);
     [val, idx] = min(t_diff);
     Bc_current = squeeze(Bc(idx, :, :));

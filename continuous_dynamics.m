@@ -2,7 +2,7 @@
 %  Contributors: Adyn Miles
 %  Description: This code runs continuous magnetic and gravity gradient dynamics.
 
-initial_values = deg2rad([5; 5; 5; 0; 0; 0]);               % Input initial conditions in degrees.
+initial_values = deg2rad([5; 5; 5; 0; 3; 0]);               % Input initial conditions in degrees.
 
 
 dt = 1;                                                     % Time step
@@ -17,19 +17,19 @@ options = odeset('RelTol',1e-8,'AbsTol',1e-8);              % Adjust ode45 toler
 % Plot Angular Positions
 figure;
 subplot(3, 1, 1);
-plot(t/5400, theta(:,1));
+plot(t/5400, theta(:,1), 'LineWidth', 2);
 title("Roll Behaviour with Magnetic Dynamics", 'FontSize', 14);
 xlabel("Number of Orbits", 'FontSize', 14);
 ylabel("Angle (rad)", 'FontSize', 14);
 
 subplot(3, 1, 2);
-plot(t/5400 , theta(:,2));
+plot(t/5400 , theta(:,2), 'LineWidth', 2);
 title("Pitch Behaviour with Magnetic Dynamics", 'FontSize', 14);
 xlabel("Number of Orbits", 'FontSize', 14);
 ylabel("Angle (rad)", 'FontSize', 14);
 
 subplot(3, 1, 3);
-plot(t/5400, theta(:,3));
+plot(t/5400, theta(:,3), 'LineWidth', 2);
 title("Yaw Behaviour with Magnetic Dynamics", 'FontSize', 14);
 xlabel("Number of Orbits", 'FontSize', 14);
 ylabel("Angle (rad)", 'FontSize', 14);
@@ -42,9 +42,9 @@ function thetadot = sys(t, theta)
     M_e = 5.98e24;                                              % Mass of Earth
     mu_e = G * M_e;                                             % Gravitational constant of Earth
 
-    I1 = 22;                                                    % Inertia values                              
+    I1 = 15;                                                    % Inertia values                              
     I2 = 30;
-    I3 = 15;
+    I3 = 22;
     
     
     inc = deg2rad(86);                                          % Inclination angle (degrees)
